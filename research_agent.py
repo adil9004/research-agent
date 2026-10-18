@@ -17,36 +17,38 @@ client = genai.Client(api_key=API_KEY)
 
 MODEL_NAME = "gemini-3.5-flash"
 
-def run_agent(topic, on_step=None):
+def run_agent(topic, depth="Quick", on_step=None):
     try:
         steps = []
         total_start = time.time()
         
-        # (a) One Gemini call that returns 3 short web search queries for the topic as a JSON list of strings
+        # Configure based on depth
+        num_queries = 2 if depth == "Quick" else 4
+        num_pages = 3 if depth == "Quick" else 6
+        
+        # (a) One Gemini call that returns web search queries for the topic as a JSON list of strings
         step_a_start = time.time()
-        print("Step (a): Generating search queries...")
-        query_prompt = f"Generate 3 short web search queries for researching the topic: {topic}. Return as a JSON list of strings."
+        print(f"Step (a): Generating {num_queries} search queries...")
+        query_prompt = f"Generate {num_queries} short web search queries for researching the topic: {topic}. Return as a JSON list of strings."
         query_response = client.models.generate_content(
             model=MODEL_NAME,
             contents=query_prompt,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
-                temperature=0.0,  # For consistent output
+                temperature=0.0,
                 thinking_config=types.ThinkingConfig(thinking_budget=0)
             )
         )
         
-        # Parse the JSON response to get a list of query strings
+        # Parse the JSON response
         try:
             queries = json.loads(query_response.text)
             if not isinstance(queries, list):
                 queries = []
-            # Ensure we have strings and take up to 3
-            queries = [str(q) for q in queries[:3] if q]
+            queries = [str(q) for q in queries[:num_queries] if q]
         except (json.JSONDecodeError, TypeError):
             queries = []
         
-        # If we didn't get any queries, fall back to a default
         if not queries:
             queries = [topic]
         
@@ -81,8 +83,8 @@ def run_agent(topic, on_step=None):
                     print(f"Error during web search for query '{q}': {e}")
                     continue
         
-        # Take the top 4 unique URLs
-        top_urls = url_list[:4]
+        # Take the top specified number of unique URLs
+        top_urls = url_list[:num_pages]
         
         step_b_elapsed = time.time() - step_b_start
         print(f"Step (b) took {step_b_elapsed:.2f} seconds")
@@ -91,7 +93,7 @@ def run_agent(topic, on_step=None):
         step_c_start = time.time()
         print("Step (c): Fetching pages in parallel...")
         fetched_texts = []  # List of (url, text) for successful fetches
-        with ThreadPoolExecutor(max_workers=4) as executor:
+        with ThreadPoolExecutor(max_workers=min(num_pages, 6)) as executor:
             future_to_url = {executor.submit(fetch_page, url): url for url in top_urls}
             for future in as_completed(future_to_url):
                 url = future_to_url[future]
